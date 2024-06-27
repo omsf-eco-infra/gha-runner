@@ -33,10 +33,10 @@ A simple GitHub Action for creating self-hosted runners. Currently, this only su
 ## Outputs
 | Name | Description |
 | ---- | ----------- |
-| mapping | A JSON object mapping instance IDs to unique GitHub runner labels. This is used in conjection with the the `instance_mapping` input when stopping. |
+| mapping | A JSON object mapping instance IDs to unique GitHub runner labels. This is used in conjunction with the `instance_mapping` input when stopping. |
 
 ## Using the action
-Setup the following GitHub Action for to provision instances on AWS:
+Set up the following GitHub Action for to provision instances on AWS:
 ```yaml
 name: Testing
 on: [push]
