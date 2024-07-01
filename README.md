@@ -1,5 +1,5 @@
 # gha-runner
-A simple GitHub Action for creating self-hosted runners. Currently, this only supports AWS and x86_64 Linux AMIs.
+A simple GitHub Action for creating self-hosted runners. Currently, this only supports AWS and Linux AMIs.
 
 ## Inputs
 

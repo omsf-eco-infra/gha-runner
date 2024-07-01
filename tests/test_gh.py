@@ -1,3 +1,4 @@
+import re
 import pytest
 from unittest.mock import patch, MagicMock, Mock
 
@@ -48,13 +49,29 @@ def github_release_mock():
             None,
             None,
         ),
-        # Test case where the latest release does not exist
+        # Test case where the platform is not supported
         (
             "darwin",
             "x64",
             None,
+            ValueError,
+            "Platform 'darwin' not supported. Supported platforms are ['linux']",
+        ),
+        # Test case where the architecture is not supported
+        (
+            "linux",
+            "armv7",
+            None,
+            ValueError,
+            "Architecture 'armv7' not supported for platform 'linux'. Supported architectures are ['x64', 'arm', 'arm64']",
+        ),
+        # Test case where the latest release does not exist
+        (
+            "linux",
+            "arm",
+            None,
             RuntimeError,
-            "Runner not found for darwin and x64",
+            "Runner release not found for platform linux and architecture arm",
         ),
     ],
 )
@@ -63,7 +80,8 @@ def test_get_latest_runner_release(
 ):
     instance, _, _ = github_release_mock
     if raises:
-        with pytest.raises(raises, match=match_msg):
+        msg = re.escape(match_msg)
+        with pytest.raises(raises, match=msg):
             instance.get_latest_runner_release(platform, architecture)
     else:
         result = instance.get_latest_runner_release(platform, architecture)

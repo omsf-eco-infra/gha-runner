@@ -293,14 +293,27 @@ class GitHubInstance:
         ------
         RuntimeError
             If the runner is not found for the given platform and architecture.
+        ValueError
+            If the platform or architecture is not supported.
 
         """
         repo = "actions/runner"
+        supported_platforms = {"linux": ["x64", "arm", "arm64"]}
+        if platform not in supported_platforms:
+            raise ValueError(
+                f"Platform '{platform}' not supported. "
+                f"Supported platforms are {list(supported_platforms)}"
+            )
+        if architecture not in supported_platforms[platform]:
+            raise ValueError(
+                f"Architecture '{architecture}' not supported for platform '{platform}'. "
+                f"Supported architectures are {supported_platforms[platform]}"
+            )
         release = self.github.get_repo(repo).get_latest_release()
         assets = release.get_assets()
         for asset in assets:
             if platform in asset.name and architecture in asset.name:
                 return asset.browser_download_url
         raise RuntimeError(
-            f"Runner not found for {platform} and {architecture}"
+            f"Runner release not found for platform {platform} and architecture {architecture}"
         )
