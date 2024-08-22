@@ -11,6 +11,11 @@ on:
     paths-ignore:
       - "docs/**"
       - "README.md"
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
   workflow_dispatch:
 
 jobs:
@@ -35,7 +40,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: 'pip'
+          cache: "pip"
 
       - name: Install Dependencies
         run: |
@@ -46,12 +51,27 @@ jobs:
         run: |
           python -m pip list
 
-      - name: Run tests
+      - name: Run short tests
+        if: "github.event.pull_request.draft"
+        run: |
+          cd tests/
+          pytest -v -m "not slow" --cov=gha_runner --cov-report=xml --color=yes .
+      - name: Upload coverage
+        if: "github.event.pull_request.draft"
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unittests-fast
+          name: codecov-py${{ matrix.python-version }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Run all tests
+        if: "!github.event.pull_request.draft"
         run: |
           cd tests/
           pytest -v --cov=gha_runner --cov-report=xml --color=yes .
-
       - name: CodeCov
+        if: "!github.event.pull_request.draft"
         uses: codecov/codecov-action@v4
         with:
           file: ./coverage.xml
