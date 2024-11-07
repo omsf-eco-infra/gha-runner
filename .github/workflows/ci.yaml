@@ -3,12 +3,14 @@ name: CI
 on:
   push:
     paths-ignore:
+      - ".github/**"
       - "docs/**"
       - "README.md"
     branches:
       - "main"
   pull_request:
     paths-ignore:
+      - ".github/**"
       - "docs/**"
       - "README.md"
   workflow_dispatch:
