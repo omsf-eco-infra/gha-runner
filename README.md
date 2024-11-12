@@ -51,6 +51,8 @@ For more information see the [self-hosted runner security docs](https://docs.git
 | mapping | A JSON object mapping instance IDs to unique GitHub runner labels. This is used in conjunction with the `instance_mapping` input when stopping. |
 | instances | A JSON list of the GitHub runner labels to be used in the 'runs-on' field |
 
+## Advanced Usage
+For usage of this actions in matrix, please see [docs/matrix.md](docs/matrix.md).
 
 ## Testing the action in development
 Testing the action was primarily done using [nektos/act]("https://github.com/nektos/act") to test locally. To do a test run with some basic defaults:
