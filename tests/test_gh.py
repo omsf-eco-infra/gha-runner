@@ -1,427 +1,317 @@
-import re
 import pytest
-from unittest.mock import patch, MagicMock, Mock
-
+from unittest.mock import Mock, patch
+import responses
 from gha_runner.gh import (
-    TokenRetrievalError,
     GitHubInstance,
+    SelfHostedRunner,
+    TokenRetrievalError,
     MissingRunnerLabel,
+    RunnerListError,
 )
-from github.SelfHostedActionsRunner import SelfHostedActionsRunner
 
 
 @pytest.fixture
-def github_release_mock():
-    # Create MagicMocks for components not directly patched
-    mock_release = MagicMock()
-    mock_asset = MagicMock()
-    mock_runners = MagicMock()
-    runner = MagicMock(spec=SelfHostedActionsRunner)
-    runner2 = MagicMock(spec=SelfHostedActionsRunner)
-
-    # Setup fixed attributes for mocks
-    asset_name = "runner-linux-x64.tar.gz"
-    asset_url = "https://github.com/testing/runner-linux-x64.tar.gz"
-    mock_asset.name = asset_name
-    mock_asset.browser_download_url = asset_url
-    runner.labels.return_value = [{"name": "runner-linux-x64"}]
-    runner2.labels.return_value = [{"name": "runner-linux-x64"}]
-    mock_runners.__iter__.return_value = [runner, runner2]
-
-    # Using patch as a context manager inside the fixture
-    with patch("gha_runner.gh.Github") as mock_github:
-        mock_repo = MagicMock()
-        mock_github.return_value.get_repo.return_value = mock_repo
-        mock_repo.get_latest_release.return_value = mock_release
-        mock_repo.get_self_hosted_runners.return_value = mock_runners
-        mock_release.get_assets.return_value = [mock_asset]
-        mock_repo.remove_self_hosted_runner.return_value = True
-
-        instance = GitHubInstance("test", "testing/testing")
-
-        yield instance, mock_asset, mock_repo
-
-
-@pytest.mark.parametrize(
-    "platform, architecture, expected, raises, match_msg",
-    [
-        # Test case where the latest release exists
-        (
-            "linux",
-            "x64",
-            "https://github.com/testing/runner-linux-x64.tar.gz",
-            None,
-            None,
-        ),
-        # Test case where the platform is not supported
-        (
-            "darwin",
-            "x64",
-            None,
-            ValueError,
-            "Platform 'darwin' not supported. Supported platforms are ['linux']",
-        ),
-        # Test case where the architecture is not supported
-        (
-            "linux",
-            "armv7",
-            None,
-            ValueError,
-            "Architecture 'armv7' not supported for platform 'linux'. Supported architectures are ['x64', 'arm', 'arm64']",
-        ),
-        # Test case where the latest release does not exist
-        (
-            "linux",
-            "arm",
-            None,
-            RuntimeError,
-            "Runner release not found for platform linux and architecture arm",
-        ),
-    ],
-)
-def test_get_latest_runner_release(
-    github_release_mock, platform, architecture, expected, raises, match_msg
-):
-    instance, _, _ = github_release_mock
-    if raises:
-        msg = re.escape(match_msg)
-        with pytest.raises(raises, match=msg):
-            instance.get_latest_runner_release(platform, architecture)
-    else:
-        result = instance.get_latest_runner_release(platform, architecture)
-        assert result == expected, f"Expected URL {expected} but got {result}"
-
-
-@pytest.mark.parametrize(
-    "label, expected",
-    [
-        # Test case where the runner exists
-        ("runner-linux-x64", SelfHostedActionsRunner),
-        # Test case where the runner does not exist
-        ("runner-darwin-x64", None),
-    ],
-)
-def test_get_runner(github_release_mock, label, expected):
-    instance, _, _ = github_release_mock
-    result = instance.get_runner(label)
-    if expected:
-        assert isinstance(result, expected)
-    assert (result is not None) == (expected is not None)
-
-
-def test_get_runners(github_release_mock):
-    instance, _, _ = github_release_mock
-    runners = instance.get_runners("runner-linux-x64")
-    assert len(runners) == 2
-    assert isinstance(runners[0], SelfHostedActionsRunner)
-    assert isinstance(runners[1], SelfHostedActionsRunner)
-
-
-@pytest.mark.parametrize(
-    "label, error, match",
-    [
-        ("runner-linux-x64", None, None),
-        (
-            "runner-darwin-x64",
-            RuntimeError,
-            "Runner runner-darwin-x64 not found",
-        ),
-    ],
-)
-def test_remove_runners(github_release_mock, label, error, match):
-    instance, _, mock_repo = github_release_mock
-    if error:
-        with pytest.raises(MissingRunnerLabel, match=match):
-            instance.remove_runners(label)
-    else:
-        instance.remove_runners(label)
-        assert mock_repo.remove_self_hosted_runner.call_count == 2
-
-
-def test_remove_runners_fail(github_release_mock):
-    instance, _, mock_repo = github_release_mock
-    mock_repo.remove_self_hosted_runner.return_value = False
-    with pytest.raises(
-        RuntimeError, match="Error removing runner runner-linux-x64"
-    ):
-        instance.remove_runners("runner-linux-x64")
-
-
-@pytest.mark.parametrize(
-    "label, error, match",
-    [
-        ("runner-linux-x64", None, None),
-        (
-            "runner-linux-x64",
-            RuntimeError,
-            "Error removing runner runner-linux-x64",
-        ),
-        (
-            "non-existent-runner",
-            MissingRunnerLabel,
-            "Runner non-existent-runner not found",
-        ),
-    ],
-)
-def test_remove_runner(github_release_mock, label, error, match):
-    instance, _, mock_repo = github_release_mock
-    if error:
-        mock_repo.remove_self_hosted_runner.return_value = False
-        with pytest.raises(error, match=match):
-            instance.remove_runner(label)
-    else:
-        instance.remove_runner(label)
-        mock_repo.remove_self_hosted_runner.assert_called_once()
-
-
-def test_headers(github_release_mock):
-    """Tests that headers get set correctly."""
-    instance, _, _ = github_release_mock
-    headers = {
-        "Authorization": f"Bearer {instance.token}",
-        "X-Github-Api-Version": "2022-11-28",
-        "Accept": "application/vnd.github+json",
-    }
-    assert instance.headers == headers
-
-
-@pytest.mark.parametrize(
-    "status_code, ok, content, error, match",
-    [
-        (200, True, None, None, None),
-        (
-            404,
-            False,
-            "Not Found",
-            RuntimeError,
-            "Error in API call for https://api.github.com/mock/test: Not Found",
-        ),
-    ],
-)
-def test_do_request(
-    github_release_mock, status_code, ok, content, error, match
-):
-    import requests
-
-    instance, _, _ = github_release_mock
-    mock_response = Mock(spec=requests.Response)
-    mock_response.status_code = status_code
-    mock_response.json.return_value = {
-        "token": "LLBF3JGZDX3P5PMEXLND6TS6FCWO6",
-        "expires_at": "2020-01-22T12:13:35.123-08:00",
-    }
-    mock_response.ok = ok
-    mock_response.content = content
-    endpoint = "/mock/test"
-    with patch("requests.get", return_value=mock_response) as mock_func:
-        if error:
-            with pytest.raises(error, match=match):
-                instance._do_request(mock_func, endpoint)
-        else:
-            response = instance._do_request(mock_func, endpoint)
-            assert response == mock_response.json.return_value
+def github_instance():
+    return GitHubInstance(token="fake-token", repo="test/test")
 
 
 @pytest.fixture
-def post_fixture(github_release_mock):
-    import requests
-
-    instance, _, _ = github_release_mock
-    mock_response = Mock(spec=requests.Response)
-    mock_response.status_code = 200
-    mock_response.json.return_value = {
-        "token": "LLBF3JGZDX3P5PMEXLND6TS6FCWO6",
-        "expires_at": "2020-01-22T12:13:35.123-08:00",
-    }
-    with patch("requests.post", return_value=mock_response):
-        yield instance, mock_response
+def mock_runner():
+    return SelfHostedRunner(
+        id=1, name="test-runner", os="linux", labels=["test-label"]
+    )
 
 
-def test_post(post_fixture):
-    instance, mock_response = post_fixture
-    response = instance.post("https://api.github.com", data={"key": "value"})
-    assert response == mock_response.json.return_value
-    mock_response.json.assert_called_once()
+def test_init(github_instance):
+    assert github_instance.token == "fake-token"
+    assert github_instance.repo == "test/test"
+    assert github_instance.BASE_URL == "https://api.github.com"
 
 
-@pytest.mark.parametrize(
-    "status_code, ok, content, error",
-    [(200, True, None, None), (404, False, "Not Found", TokenRetrievalError)],
-)
-def test_create_runner_token(post_fixture, status_code, ok, content, error):
-    instance, mock_response = post_fixture
-    mock_response.status_code = status_code
-    mock_response.ok = ok
-    mock_response.content = content
-    error_str = f"Error creating runner token: Error in API call for https://api.github.com/repos/testing/testing/actions/runners/registration-token: {mock_response.content}"
-    if error:
-        with pytest.raises(error, match=error_str):
-            instance.create_runner_token()
-    else:
-        response = instance.create_runner_token()
-        assert response == mock_response.json.return_value["token"]
-        mock_response.json.assert_called_once()
+def test_headers(github_instance):
+    headers = github_instance._headers({})
+    assert headers["Authorization"] == "Bearer fake-token"
+    assert headers["X-Github-Api-Version"] == "2022-11-28"
+    assert headers["Accept"] == "application/vnd.github+json"
 
 
-@pytest.fixture
-def post_fixture_multi(monkeypatch):
-    import requests
-
-    responses = [
-        {
-            "status_code": 200,
-            "json": {
-                "token": "LLBF3JGZDX3P5PMEXLND6TS6FCWO6",
-                "expires_at": "2020-01-22T12:13:35.123-08:00",
-            },
-        },
-        {
-            "status_code": 200,
-            "json": {
-                "token": "LLBF3JGZDX3P5PMEXLND6TS6FCWO7",
-                "expires_at": "2020-01-22T12:13:35.123-08:00",
-            },
-        },
-        {
-            "status_code": 200,
-            "json": {
-                "token": "LLBF3JGZDX3P5PMEXLND6TS6FCWO8",
-                "expires_at": "2020-01-22T12:13:35.123-08:00",
-            },
-        },
-    ]
-
-    def side_effect(*args, **kwargs):
-        response = responses.pop(0)
-        mock_response = Mock(spec=requests.Response)
-        mock_response.status_code = response["status_code"]
-        mock_response.json.return_value = response["json"]
-        return mock_response
-
-    mock = Mock(side_effect=side_effect)
-    monkeypatch.setattr(requests, "post", mock)
-    return mock, responses
+@responses.activate
+def test_create_runner_token(github_instance):
+    responses.add(
+        responses.POST,
+        "https://api.github.com/repos/test/test/actions/runners/registration-token",
+        json={"token": "test-token"},
+        status=200,
+    )
+    token = github_instance.create_runner_token()
+    assert token == "test-token"
 
 
-def test_create_github_runners(github_release_mock, post_fixture_multi):
-    instance, _, _ = github_release_mock
-    json_mock, responses = post_fixture_multi
-    count = len(responses)
-    out = instance.create_runner_tokens(count)
-    assert len(out) == count
-    for idx, resp in enumerate(responses):
-        assert out[idx] == resp["json"]["token"]
-
-    assert json_mock.call_count == count
-
-
-@pytest.fixture
-def post_fixture_multi_fail(monkeypatch):
-    import requests
-
-    responses = [
-        {
-            "status_code": 200,
-            "json": {
-                "token": "LLBF3JGZDX3P5PMEXLND6TS6FCWO6",
-                "expires_at": "2020-01-22T12:13:35.123-08:00",
-            },
-        },
-        {
-            "status_code": 404,
-            "json": {
-                "message": "Not Found",
-            },
-        },
-    ]
-
-    def side_effect(*args, **kwargs):
-        response = responses.pop(0)
-        mock_response = Mock(spec=requests.Response)
-        mock_response.status_code = response["status_code"]
-        mock_response.json.return_value = response["json"]
-        mock_response.ok = response["status_code"] == 200
-        return mock_response
-
-    mock = Mock(side_effect=side_effect)
-    monkeypatch.setattr(requests, "post", mock)
-    return mock, responses
-
-
-def test_create_github_runners_exception(
-    github_release_mock, post_fixture_multi_fail
-):
-    instance, _, _ = github_release_mock
-    json_mock, responses = post_fixture_multi_fail
-    count = len(responses)
+@responses.activate
+def test_create_runner_token_error(github_instance):
+    responses.add(
+        responses.POST,
+        "https://api.github.com/repos/test/test/actions/runners/registration-token",
+        status=400,
+    )
     with pytest.raises(TokenRetrievalError):
-        instance.create_runner_tokens(count)
-        assert json_mock.call_count == count
+        github_instance.create_runner_token()
 
 
-def test_generate_random_label(github_release_mock):
-    instance, _, _ = github_release_mock
-    with patch("random.choice", return_value="a"):
-        label = instance.generate_random_label()
-        assert label == f"runner-{'a'*8}"
+@responses.activate
+def test_create_runner_tokens(github_instance):
+    tokens = ["test-token-1", "test-token-2", "test-token-3"]
+    for token in tokens:
+        responses.add(
+            responses.POST,
+            "https://api.github.com/repos/test/test/actions/runners/registration-token",
+            json={"token": token},
+            status=200,
+        )
+    assert github_instance.create_runner_tokens(3) == tokens
 
 
-@pytest.fixture
-def mock_get_runner(monkeypatch):
-    label = "runner-linux-x64"
-    side_effect = [None, None, {"label": label}]
-    missing_str = f"Runner {label} not found. Waiting...\n"
-    found_str = f"Runner {label} found!\n"
-    # Dynamically build out the expected calls based on the side_effect
-    expected_calls = [
-        missing_str if x is None else found_str for x in side_effect
-    ]
+@responses.activate
+def test_get_runners(github_instance):
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/test/test/actions/runners",
+        json={
+            "runners": [
+                {
+                    "id": 1,
+                    "name": "test-runner",
+                    "os": "linux",
+                    "labels": [{"name": "test-label"}],
+                }
+            ]
+        },
+        status=200,
+    )
+    runners = github_instance.get_runners()
+    assert len(runners) == 1
+    assert runners[0].id == 1
+    assert runners[0].name == "test-runner"
+    assert runners[0].labels == ["test-label"]
 
-    get_runner_mock = MagicMock()
-    # Setup the side_effect for the get_runner_mock
-    get_runner_mock.side_effect = side_effect
-    monkeypatch.setattr(GitHubInstance, "get_runner", get_runner_mock)
-    return get_runner_mock, label, expected_calls
+
+@responses.activate
+def test_get_runners_empty(github_instance):
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/test/test/actions/runners",
+        json={"runners": []},
+        status=200,
+    )
+    assert github_instance.get_runners() is None
 
 
-def test_wait_for_runner(github_release_mock, mock_get_runner, capsys):
-    instance, _, _ = github_release_mock
-    get_runner_mock, label, expected_calls = mock_get_runner
-    instance.wait_for_runner(label, 10, wait=1)
-    captured = capsys.readouterr()
-    # Combine all expected calls into a single string
-    combined = "".join(expected_calls)
+@responses.activate
+def test_get_runners_no_json(github_instance):
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/test/test/actions/runners",
+        body="",
+        status=200,
+    )
+    with pytest.raises(RunnerListError, match="Error getting runners: *"):
+        github_instance.get_runners()
 
-    # Validate that the expected output matches the captured output
-    assert captured.out == combined
-    # Validate that the get_runner method was called the correct number of times
-    assert get_runner_mock.call_count == len(expected_calls)
 
-@pytest.fixture
-def mock_get_runner_timeout(monkeypatch):
-    label = "runner-linux-x64"
-    side_effect = [None, None]
-    # Dynamically build out the expected calls based on the side_effect
-    expected_calls = [
-        f"Runner {label} not found. Waiting...\n ",
-    ]
+@responses.activate
+def test_get_runners_error(github_instance):
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/test/test/actions/runners",
+        status=500,
+    )
+    with pytest.raises(RunnerListError, match="Error getting runners: *"):
+        github_instance.get_runners()
 
-    get_runner_mock = MagicMock()
-    # Setup the side_effect for the get_runner_mock
-    get_runner_mock.side_effect = side_effect
-    monkeypatch.setattr(GitHubInstance, "get_runner", get_runner_mock)
-    return get_runner_mock, label, expected_calls
 
-def test_wait_for_runner_timeout(github_release_mock, mock_get_runner_timeout, capsys):
-    instance, _, _ = github_release_mock
-    get_runner_mock, label, expected_calls = mock_get_runner_timeout
-    with pytest.raises(RuntimeError, match=f"Timeout reached: Runner {label} not found"):
-        instance.wait_for_runner(label, timeout=1, wait=1)
-        captured = capsys.readouterr()
-        # Combine all expected calls into a single string
-        combined = "".join(expected_calls)
+def test_get_runner_by_label(github_instance, mock_runner):
+    with patch.object(
+        github_instance, "get_runners", return_value=[mock_runner]
+    ):
+        runner = github_instance.get_runner("test-label")
+        assert runner.id == 1
+        assert runner.name == "test-runner"
 
-        # Validate that the expected output matches the captured output
-        assert captured.out == combined
-        # Validate that the get_runner method was called the correct number of times
-        assert get_runner_mock.call_count == len(expected_calls)
+
+def test_get_runner_missing_label(github_instance):
+    with patch.object(github_instance, "get_runners", return_value=[]):
+        with pytest.raises(MissingRunnerLabel):
+            github_instance.get_runner("nonexistent-label")
+
+
+@responses.activate
+def test_remove_runner(github_instance, mock_runner):
+    with patch.object(github_instance, "get_runner", return_value=mock_runner):
+        responses.add(
+            responses.DELETE,
+            f"https://api.github.com/repos/test/test/actions/runners/{mock_runner.id}",
+            status=204,
+        )
+        github_instance.remove_runner("test-label")
+
+
+@responses.activate
+def test_remove_runner_error(github_instance, mock_runner):
+    with patch.object(github_instance, "get_runner", return_value=mock_runner):
+        responses.add(
+            responses.DELETE,
+            f"https://api.github.com/repos/test/test/actions/runners/{mock_runner.id}",
+            status=500,
+        )
+        with pytest.raises(RuntimeError):
+            github_instance.remove_runner("test-label")
+
+
+def test_generate_random_label():
+    label = GitHubInstance.generate_random_label()
+    assert label.startswith("runner-")
+    assert len(label) == 15  # "runner-" + 8 random chars
+
+
+@responses.activate
+def test_get_latest_runner_release(github_instance):
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/actions/runner/releases/latest",
+        json={
+            "assets": [
+                {
+                    "name": "actions-runner-linux-x64-2.0.0.tar.gz",
+                    "browser_download_url": "https://example.com/runner.tar.gz",
+                }
+            ]
+        },
+        status=200,
+    )
+    url = github_instance.get_latest_runner_release("linux", "x64")
+    assert url == "https://example.com/runner.tar.gz"
+
+
+def test_get_latest_runner_release_invalid_platform(github_instance):
+    with pytest.raises(ValueError):
+        github_instance.get_latest_runner_release("invalid", "x64")
+
+
+def test_get_latest_runner_release_invalid_arch(github_instance):
+    with pytest.raises(ValueError):
+        github_instance.get_latest_runner_release("linux", "invalid")
+
+
+@patch("time.sleep")  # Prevent actual sleeping in tests
+def test_wait_for_runner_success(mock_sleep, github_instance, mock_runner):
+    with patch.object(
+        github_instance, "get_runner", side_effect=[None, mock_runner]
+    ):
+        github_instance.wait_for_runner("test-label", timeout=30)
+        assert mock_sleep.call_count == 1
+
+
+@patch("time.sleep")
+@patch("time.time", side_effect=[0, 31])
+def test_wait_for_runner_timeout(mock_time, mock_sleep, github_instance):
+    with patch.object(github_instance, "get_runner", return_value=None):
+        with pytest.raises(RuntimeError):
+            github_instance.wait_for_runner("test-label", timeout=30)
+
+
+@responses.activate
+def test_get_latest_release(github_instance):
+    json = {
+        "url": "https://api.github.com/repos/octocat/Hello-World/releases/1",
+        "html_url": "https://github.com/octocat/Hello-World/releases/v1.0.0",
+        "assets_url": "https://api.github.com/repos/octocat/Hello-World/releases/1/assets",
+        "upload_url": "https://uploads.github.com/repos/octocat/Hello-World/releases/1/assets{?name,label}",
+        "tarball_url": "https://api.github.com/repos/octocat/Hello-World/tarball/v1.0.0",
+        "zipball_url": "https://api.github.com/repos/octocat/Hello-World/zipball/v1.0.0",
+        "discussion_url": "https://github.com/octocat/Hello-World/discussions/90",
+        "id": 1,
+        "assets": [
+            {
+                "url": "https://api.github.com/repos/octocat/Hello-World/releases/assets/1",
+                "browser_download_url": "https://github.com/octocat/Hello-World/releases/download/v1.0.0/example.zip",
+                "id": 1,
+                "node_id": "MDEyOlJlbGVhc2VBc3NldDE=",
+                "name": "example.zip",
+                "label": "short description",
+                "state": "uploaded",
+                "content_type": "application/zip",
+                "size": 1024,
+                "download_count": 42,
+                "created_at": "2013-02-27T19:35:32Z",
+                "updated_at": "2013-02-27T19:35:32Z",
+                "uploader": {
+                    "login": "octocat",
+                    "id": 1,
+                    "node_id": "MDQ6VXNlcjE=",
+                    "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+                    "gravatar_id": "",
+                    "url": "https://api.github.com/users/octocat",
+                    "html_url": "https://github.com/octocat",
+                    "followers_url": "https://api.github.com/users/octocat/followers",
+                    "following_url": "https://api.github.com/users/octocat/following{/other_user}",
+                    "gists_url": "https://api.github.com/users/octocat/gists{/gist_id}",
+                    "starred_url": "https://api.github.com/users/octocat/starred{/owner}{/repo}",
+                    "subscriptions_url": "https://api.github.com/users/octocat/subscriptions",
+                    "organizations_url": "https://api.github.com/users/octocat/orgs",
+                    "repos_url": "https://api.github.com/users/octocat/repos",
+                    "events_url": "https://api.github.com/users/octocat/events{/privacy}",
+                    "received_events_url": "https://api.github.com/users/octocat/received_events",
+                    "type": "User",
+                    "site_admin": False,
+                },
+            }
+        ],
+    }
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/actions/runner/releases/latest",
+        status=200,
+        json=json,
+    )
+    body = github_instance._get_latest_release(repo="actions/runner")
+    assert body == json
+
+
+@responses.activate
+def test_get_latest_release_error(github_instance):
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/actions/runner/releases/latest",
+        status=500,
+    )
+    with pytest.raises(RuntimeError, match="Error getting latest release: *"):
+        github_instance._get_latest_release(repo="actions/runner")
+
+
+@responses.activate
+def test_get_latest_reunner_release_error(github_instance):
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/actions/runner/releases/latest",
+        status=200,
+        json={
+            "assets": [
+                {
+                    "name": "actions-runner-linux-aarch64-2.0.0.tar.gz",
+                    "browser_download_url": "https://example.com/runner.tar.gz",
+                }
+            ]
+        },
+    )
+    platform = "linux"
+    arch = "x64"
+    responses.add(
+        responses.GET,
+        "https://api.github.com/repos/actions/runner/releases/latest",
+        status=500,
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=f"Runner release not found for platform {platform} and architecture {arch}",
+    ):
+        github_instance.get_latest_runner_release("linux", "x64")

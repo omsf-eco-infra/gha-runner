@@ -5,13 +5,14 @@ description = "A GitHub Runner for deploying on cloud backends"
 authors = [{ name = "Ethan Holz", email = "ethan.holz@omsf.io" }]
 readme = "README.md"
 requires-python = ">= 3.10"
-dependencies = ["boto3", "PyGithub"]
+dependencies = ["boto3"]
 
 [project.optional-dependencies]
 test = [
     "pytest",
     "pytest-cov",
     "moto[ec2]",
+    "responses"
 ]
 
 [build-system]
