@@ -6,6 +6,74 @@ import boto3
 from string import Template
 
 
+class StartCloudDeployment(ABC):
+    """Abstract base class for starting a cloud instance.
+
+    This class defines the interface for starting a cloud instance.
+
+    """
+
+    @abstractmethod
+    def create_instance(self) -> str:
+        """Create an instance in the cloud provider and return its ID.
+        The number of instances to create is defined by the implementation.
+
+        Returns
+        -------
+        str
+            The instance ID.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def wait_until_ready(self, ids: list[str], **kwargs):
+        """Wait until instances are in a ready state.
+
+        Parameters
+        ----------
+        ids : list[str]
+            A list of instance IDs to wait for.
+        **kwargs : dict, optional
+            Additional arguments to pass to the waiter.
+
+        """
+        raise NotImplementedError
+
+
+class StopCloudDeployment(ABC):
+    """Abstract base class for stopping a cloud instance.
+
+    This class defines the interface for stopping a cloud instance.
+
+    """
+
+    @abstractmethod
+    def remove_instances(self, ids: list[str]):
+        """Remove instances from the cloud provider.
+
+        Parameters
+        ----------
+        ids : list[str]
+            A list of instance IDs to remove.
+
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def wait_until_removed(self, ids: list[str], **kwargs):
+        """Wait until instances are removed.
+
+        Parameters
+        ----------
+        ids : list[str]
+            A list of instance IDs to wait for.
+        **kwargs : dict, optional
+            Additional arguments to pass to the waiter.
+
+        """
+        raise NotImplementedError
+
+
 class CloudDeployment(ABC):
     """Abstract base class for cloud deployment.
 
