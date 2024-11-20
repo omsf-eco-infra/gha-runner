@@ -350,13 +350,13 @@ class DeployInstance:
         # We need to create runner tokens for use by the provider
         runner_tokens = self.gh.create_runner_tokens(self.count)
         self.cloud_params["gh_runner_tokens"] = runner_tokens
-        self.provider = self.provider_type(**self.cloud_params)
-
-    def start_runner_instances(self):
         release = self.gh.get_latest_runner_release(
             platform="linux", architecture="x64"
         )
         self.cloud_params["runner_release"] = release
+        self.provider = self.provider_type(**self.cloud_params)
+
+    def start_runner_instances(self):
         print("Starting up...")
         # Create a GitHub instance
         print("Creating GitHub Actions Runner")
