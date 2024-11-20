@@ -379,9 +379,13 @@ class DeployInstance:
 
 @dataclass
 class TeardownInstance:
-    provider: StopCloudInstance
+    provider_type: Type[StopCloudInstance]
     cloud_params: dict
     gh: GitHubInstance
+    provider: StopCloudInstance = field(init=False)
+
+    def __post_init__(self):
+        self.provider = self.provider_type(**self.cloud_params)
 
     def _get_instance_mapping(self) -> dict[str, str]:
         mapping_str = os.environ.get("INPUT_INSTANCE_MAPPING")
