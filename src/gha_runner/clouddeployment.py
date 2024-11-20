@@ -1,12 +1,15 @@
 from abc import ABC, abstractmethod
-from gha_runner.gh import GitHubInstance
+from gha_runner.gh import GitHubInstance, MissingRunnerLabel
+from gha_runner.helper import output, warning, error
 from dataclasses import dataclass, field
 import importlib.resources
 import boto3
 from string import Template
+import json
+import os
 
 
-class StartCloudDeployment(ABC):
+class CreateCloudInstance(ABC):
     """Abstract base class for starting a cloud instance.
 
     This class defines the interface for starting a cloud instance.
@@ -14,14 +17,14 @@ class StartCloudDeployment(ABC):
     """
 
     @abstractmethod
-    def create_instance(self) -> str:
-        """Create an instance in the cloud provider and return its ID.
+    def create_instances(self) -> dict[str, str]:
+        """Create instances in the cloud provider and return their IDs.
         The number of instances to create is defined by the implementation.
 
         Returns
         -------
-        str
-            The instance ID.
+        dict[str, str]
+            A dictionary of instance IDs and their corresponding github runner labels.
         """
         raise NotImplementedError
 
@@ -40,7 +43,7 @@ class StartCloudDeployment(ABC):
         raise NotImplementedError
 
 
-class StopCloudDeployment(ABC):
+class StopCloudInstance(ABC):
     """Abstract base class for stopping a cloud instance.
 
     This class defines the interface for stopping a cloud instance.
@@ -331,3 +334,98 @@ class CloudDeploymentFactory:
                 )
         else:
             raise ValueError(f"Invalid provider name: '{provider_name}'")
+
+
+@dataclass
+class DeployInstance:
+    provider: CreateCloudInstance
+    cloud_params: dict
+    gh: GitHubInstance
+    count: int
+    timeout: int
+
+    def start_runner_instances(self):
+        release = self.gh.get_latest_runner_release(
+            platform="linux", architecture="x64"
+        )
+        self.cloud_params["runner_release"] = release
+        print("Starting up...")
+        # Create a GitHub instance
+        print("Creating GitHub Actions Runner")
+        # We need to create a runner token first
+        runner_tokens = self.gh.create_runner_tokens(self.count)
+        self.cloud_params["gh_runner_tokens"] = runner_tokens
+        mappings = self.provider.create_instances()
+        instance_ids = list(mappings.keys())
+        github_labels = list(mappings.values())
+        # Output the instance mapping and labels so the stop action can use them
+        output("mapping", json.dumps(mappings))
+        output("instances", json.dumps(github_labels))
+        # Wait for the instance to be ready
+        print("Waiting for instance to be ready...")
+        self.provider.wait_until_ready(instance_ids)
+        print("Instance is ready!")
+        # Confirm the runner is registered with GitHub
+        for label in github_labels:
+            print(f"Waiting for {label}...")
+            self.gh.wait_for_runner(label, self.timeout)
+
+
+@dataclass
+class TeardownInstance:
+    provider: StopCloudInstance
+    cloud_params: dict
+    gh: GitHubInstance
+
+    def _get_instance_mapping(self) -> dict[str, str]:
+        mapping_str = os.environ.get("INPUT_INSTANCE_MAPPING")
+        if mapping_str is None:
+            raise ValueError(
+                "Missing required input variable INPUT_INSTANCE_MAPPING"
+            )
+        return json.loads(mapping_str)
+
+    def stop_runner_instances(self):
+        print("Shutting down...")
+        try:
+            # Get the instance mapping from our input
+            mappings = self._get_instance_mapping()
+        except Exception as e:
+            error(title="Malformed instance mapping", message=e)
+            exit(1)
+        # Remove the runners and instances
+        print("Removing GitHub Actions Runner")
+        instance_ids = list(mappings.keys())
+        labels = list(mappings.values())
+        for label in labels:
+            try:
+                print(f"Removing runner {label}")
+                self.gh.remove_runner(label)
+            # This occurs when we have a runner that might already be shutdown.
+            # Since we are mainly using the ephemeral runners, we expect this to happen
+            except MissingRunnerLabel:
+                print(f"Runner {label} does not exist, skipping...")
+                continue
+            # This is more of the case when we have a failure to remove the runner
+            # This is not a concern for the user (because we will remove the instance anyways),
+            # but we should log it for debugging purposes.
+            except Exception as e:
+                warning(title="Failed to remove runner", message=e)
+        print("Removing instances...")
+        self.provider.remove_instances(instance_ids)
+        print("Waiting for instance to be removed...")
+        try:
+            self.provider.wait_until_removed(instance_ids)
+        except Exception as e:
+            # Print to stdout
+            print(
+                f"Failed to remove instances check your provider console: {e}"
+            )
+            # Print to Annotations
+            error(
+                title="Failed to remove instances, check your provider console",
+                message=e,
+            )
+            exit(1)
+        else:
+            print("Instances removed!")
