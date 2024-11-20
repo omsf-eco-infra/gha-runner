@@ -1,12 +1,10 @@
 from abc import ABC, abstractmethod
 from gha_runner.gh import GitHubInstance, MissingRunnerLabel
-from gha_runner.helper import output, warning, error
+from gha_runner.helper import warning, error
 from dataclasses import dataclass, field
 import importlib.resources
 import boto3
 from string import Template
-import json
-import os
 from typing import Type
 
 
@@ -40,6 +38,16 @@ class CreateCloudInstance(ABC):
         **kwargs : dict, optional
             Additional arguments to pass to the waiter.
 
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_instance_mapping(self, mapping: dict[str, str]):
+        """Set the instance mapping in the environment.
+        Parameters
+        ----------
+        mapping : dict[str, str]
+            A dictionary of instance IDs and their corresponding github runner labels.
         """
         raise NotImplementedError
 
@@ -377,8 +385,7 @@ class DeployInstance:
         instance_ids = list(mappings.keys())
         github_labels = list(mappings.values())
         # Output the instance mapping and labels so the stop action can use them
-        output("mapping", json.dumps(mappings))
-        output("instances", json.dumps(github_labels))
+        self.provider.set_instance_mapping(mappings)
         # Wait for the instance to be ready
         print("Waiting for instance to be ready...")
         self.provider.wait_until_ready(instance_ids)
