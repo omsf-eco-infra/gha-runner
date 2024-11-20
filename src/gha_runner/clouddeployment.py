@@ -77,6 +77,18 @@ class StopCloudInstance(ABC):
         """
         raise NotImplementedError
 
+    @abstractmethod
+    def get_instance_mapping(self) -> dict[str, str]:
+        """Get the instance mapping from the environment.
+
+        Returns
+        -------
+        dict[str, str]
+            A dictionary of instance IDs and their corresponding github runner labels.
+
+        """
+        raise NotImplementedError
+
 
 class CloudDeployment(ABC):
     """Abstract base class for cloud deployment.
@@ -387,19 +399,11 @@ class TeardownInstance:
     def __post_init__(self):
         self.provider = self.provider_type(**self.cloud_params)
 
-    def _get_instance_mapping(self) -> dict[str, str]:
-        mapping_str = os.environ.get("INPUT_INSTANCE_MAPPING")
-        if mapping_str is None:
-            raise ValueError(
-                "Missing required input variable INPUT_INSTANCE_MAPPING"
-            )
-        return json.loads(mapping_str)
-
     def stop_runner_instances(self):
         print("Shutting down...")
         try:
             # Get the instance mapping from our input
-            mappings = self._get_instance_mapping()
+            mappings = self.provider.get_instance_mapping()
         except Exception as e:
             error(title="Malformed instance mapping", message=e)
             exit(1)
