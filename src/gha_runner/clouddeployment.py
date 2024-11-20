@@ -7,6 +7,7 @@ import boto3
 from string import Template
 import json
 import os
+from typing import Type
 
 
 class CreateCloudInstance(ABC):
@@ -338,11 +339,18 @@ class CloudDeploymentFactory:
 
 @dataclass
 class DeployInstance:
-    provider: CreateCloudInstance
+    provider_type: Type[CreateCloudInstance]
     cloud_params: dict
     gh: GitHubInstance
     count: int
     timeout: int
+    provider: CreateCloudInstance = field(init=False)
+
+    def __post_init__(self):
+        # We need to create runner tokens for use by the provider
+        runner_tokens = self.gh.create_runner_tokens(self.count)
+        self.cloud_params["gh_runner_tokens"] = runner_tokens
+        self.provider = self.provider_type(**self.cloud_params)
 
     def start_runner_instances(self):
         release = self.gh.get_latest_runner_release(
@@ -352,9 +360,7 @@ class DeployInstance:
         print("Starting up...")
         # Create a GitHub instance
         print("Creating GitHub Actions Runner")
-        # We need to create a runner token first
-        runner_tokens = self.gh.create_runner_tokens(self.count)
-        self.cloud_params["gh_runner_tokens"] = runner_tokens
+
         mappings = self.provider.create_instances()
         instance_ids = list(mappings.keys())
         github_labels = list(mappings.values())
