@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from gha_runner.gh import GitHubInstance, MissingRunnerLabel
-from gha_runner.helper import warning, error
+from gha_runner.helper.workflow_cmds import warning, error
 from dataclasses import dataclass, field
 from typing import Type
 
